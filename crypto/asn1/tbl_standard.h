@@ -1,7 +1,7 @@
 /*
- * Copyright 1999-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -50,8 +50,13 @@ static const ASN1_STRING_TABLE tbl_standard[] = {
     {NID_ms_csp_name, -1, -1, B_ASN1_BMPSTRING, STABLE_NO_MASK},
     {NID_rfc822Mailbox, 1, ub_rfc822_mailbox, B_ASN1_IA5STRING,
      STABLE_NO_MASK},
+    {NID_jurisdictionCountryName, 2, 2, B_ASN1_PRINTABLESTRING, STABLE_NO_MASK},
     {NID_INN, 1, 12, B_ASN1_NUMERICSTRING, STABLE_NO_MASK},
     {NID_OGRN, 1, 13, B_ASN1_NUMERICSTRING, STABLE_NO_MASK},
-    {NID_SNILS, 1, 11, B_ASN1_NUMERICSTRING, STABLE_NO_MASK}
+    {NID_SNILS, 1, 11, B_ASN1_NUMERICSTRING, STABLE_NO_MASK},
+    {NID_countryCode3c, 3, 3, B_ASN1_PRINTABLESTRING, STABLE_NO_MASK},
+    {NID_countryCode3n, 3, 3, B_ASN1_NUMERICSTRING, STABLE_NO_MASK},
+    {NID_dnsName, 0, -1, B_ASN1_UTF8STRING, STABLE_NO_MASK},
+    {NID_id_on_SmtpUTF8Mailbox, 1, ub_email_address, B_ASN1_UTF8STRING, STABLE_NO_MASK}
 };
 

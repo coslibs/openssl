@@ -1,7 +1,7 @@
 /*
- * Copyright 1999-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include "internal/cryptlib.h"
 #include <openssl/x509v3.h>
-#include "internal/x509_int.h"
+#include "crypto/x509.h"
 
 static int tr_cmp(const X509_TRUST *const *a, const X509_TRUST *const *b);
 static void trtable_free(X509_TRUST *p);
@@ -98,13 +98,14 @@ int X509_TRUST_get_by_id(int id)
 {
     X509_TRUST tmp;
     int idx;
+
     if ((id >= X509_TRUST_MIN) && (id <= X509_TRUST_MAX))
         return id - X509_TRUST_MIN;
-    tmp.trust = id;
-    if (!trtable)
+    if (trtable == NULL)
         return -1;
+    tmp.trust = id;
     idx = sk_X509_TRUST_find(trtable, &tmp);
-    if (idx == -1)
+    if (idx < 0)
         return -1;
     return idx + X509_TRUST_COUNT;
 }
@@ -112,7 +113,7 @@ int X509_TRUST_get_by_id(int id)
 int X509_TRUST_set(int *t, int trust)
 {
     if (X509_TRUST_get_by_id(trust) == -1) {
-        X509err(X509_F_X509_TRUST_SET, X509_R_INVALID_TRUST);
+        ERR_raise(ERR_LIB_X509, X509_R_INVALID_TRUST);
         return 0;
     }
     *t = trust;
@@ -135,7 +136,7 @@ int X509_TRUST_add(int id, int flags, int (*ck) (X509_TRUST *, X509 *, int),
     /* Need a new entry */
     if (idx == -1) {
         if ((trtmp = OPENSSL_malloc(sizeof(*trtmp))) == NULL) {
-            X509err(X509_F_X509_TRUST_ADD, ERR_R_MALLOC_FAILURE);
+            ERR_raise(ERR_LIB_X509, ERR_R_MALLOC_FAILURE);
             return 0;
         }
         trtmp->flags = X509_TRUST_DYNAMIC;
@@ -147,7 +148,7 @@ int X509_TRUST_add(int id, int flags, int (*ck) (X509_TRUST *, X509 *, int),
         OPENSSL_free(trtmp->name);
     /* dup supplied name */
     if ((trtmp->name = OPENSSL_strdup(name)) == NULL) {
-        X509err(X509_F_X509_TRUST_ADD, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_X509, ERR_R_MALLOC_FAILURE);
         goto err;
     }
     /* Keep the dynamic flag of existing entry */
@@ -164,11 +165,11 @@ int X509_TRUST_add(int id, int flags, int (*ck) (X509_TRUST *, X509 *, int),
     if (idx == -1) {
         if (trtable == NULL
             && (trtable = sk_X509_TRUST_new(tr_cmp)) == NULL) {
-            X509err(X509_F_X509_TRUST_ADD, ERR_R_MALLOC_FAILURE);
+            ERR_raise(ERR_LIB_X509, ERR_R_MALLOC_FAILURE);
             goto err;;
         }
         if (!sk_X509_TRUST_push(trtable, trtmp)) {
-            X509err(X509_F_X509_TRUST_ADD, ERR_R_MALLOC_FAILURE);
+            ERR_raise(ERR_LIB_X509, ERR_R_MALLOC_FAILURE);
             goto err;
         }
     }
@@ -183,7 +184,7 @@ int X509_TRUST_add(int id, int flags, int (*ck) (X509_TRUST *, X509 *, int),
 
 static void trtable_free(X509_TRUST *p)
 {
-    if (!p)
+    if (p == NULL)
         return;
     if (p->flags & X509_TRUST_DYNAMIC) {
         if (p->flags & X509_TRUST_DYNAMIC_NAME)
@@ -239,8 +240,9 @@ static int trust_1oid(X509_TRUST *trust, X509 *x, int flags)
 static int trust_compat(X509_TRUST *trust, X509 *x, int flags)
 {
     /* Call for side-effect of computing hash and caching extensions */
-    X509_check_purpose(x, -1, 0);
-    if ((flags & X509_TRUST_NO_SS_COMPAT) == 0 && x->ex_flags & EXFLAG_SS)
+    if (X509_check_purpose(x, -1, 0) != 1)
+        return X509_TRUST_UNTRUSTED;
+    if ((flags & X509_TRUST_NO_SS_COMPAT) == 0 && (x->ex_flags & EXFLAG_SS))
         return X509_TRUST_TRUSTED;
     else
         return X509_TRUST_UNTRUSTED;

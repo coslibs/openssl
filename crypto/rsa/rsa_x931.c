@@ -1,11 +1,17 @@
 /*
- * Copyright 2005-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2005-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
+
+/*
+ * RSA low level APIs are deprecated for public use, but still ok for
+ * internal use.
+ */
+#include "internal/deprecated.h"
 
 #include <stdio.h>
 #include "internal/cryptlib.h"
@@ -27,16 +33,16 @@ int RSA_padding_add_X931(unsigned char *to, int tlen,
     j = tlen - flen - 2;
 
     if (j < 0) {
-        RSAerr(RSA_F_RSA_PADDING_ADD_X931, RSA_R_DATA_TOO_LARGE_FOR_KEY_SIZE);
+        ERR_raise(ERR_LIB_RSA, RSA_R_DATA_TOO_LARGE_FOR_KEY_SIZE);
         return -1;
     }
 
     p = (unsigned char *)to;
 
     /* If no padding start and end nibbles are in one byte */
-    if (j == 0)
+    if (j == 0) {
         *p++ = 0x6A;
-    else {
+    } else {
         *p++ = 0x6B;
         if (j > 1) {
             memset(p, 0xBB, j - 1);
@@ -47,7 +53,7 @@ int RSA_padding_add_X931(unsigned char *to, int tlen,
     memcpy(p, from, (unsigned int)flen);
     p += flen;
     *p = 0xCC;
-    return (1);
+    return 1;
 }
 
 int RSA_padding_check_X931(unsigned char *to, int tlen,
@@ -58,7 +64,7 @@ int RSA_padding_check_X931(unsigned char *to, int tlen,
 
     p = from;
     if ((num != flen) || ((*p != 0x6A) && (*p != 0x6B))) {
-        RSAerr(RSA_F_RSA_PADDING_CHECK_X931, RSA_R_INVALID_HEADER);
+        ERR_raise(ERR_LIB_RSA, RSA_R_INVALID_HEADER);
         return -1;
     }
 
@@ -69,7 +75,7 @@ int RSA_padding_check_X931(unsigned char *to, int tlen,
             if (c == 0xBA)
                 break;
             if (c != 0xBB) {
-                RSAerr(RSA_F_RSA_PADDING_CHECK_X931, RSA_R_INVALID_PADDING);
+                ERR_raise(ERR_LIB_RSA, RSA_R_INVALID_PADDING);
                 return -1;
             }
         }
@@ -77,21 +83,22 @@ int RSA_padding_check_X931(unsigned char *to, int tlen,
         j -= i;
 
         if (i == 0) {
-            RSAerr(RSA_F_RSA_PADDING_CHECK_X931, RSA_R_INVALID_PADDING);
+            ERR_raise(ERR_LIB_RSA, RSA_R_INVALID_PADDING);
             return -1;
         }
 
-    } else
+    } else {
         j = flen - 2;
+    }
 
     if (p[j] != 0xCC) {
-        RSAerr(RSA_F_RSA_PADDING_CHECK_X931, RSA_R_INVALID_TRAILER);
+        ERR_raise(ERR_LIB_RSA, RSA_R_INVALID_TRAILER);
         return -1;
     }
 
     memcpy(to, p, (unsigned int)j);
 
-    return (j);
+    return j;
 }
 
 /* Translate between X931 hash ids and NIDs */

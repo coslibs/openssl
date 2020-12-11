@@ -1,7 +1,7 @@
 /*
  * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -14,7 +14,10 @@
 #include <openssl/evp.h>
 #include <openssl/ui.h>
 
-#ifndef OPENSSL_NO_UI
+#ifndef BUFSIZ
+# define BUFSIZ 256
+#endif
+
 /* should be init to zeros. */
 static char prompt_string[80];
 
@@ -31,9 +34,9 @@ void EVP_set_pw_prompt(const char *prompt)
 char *EVP_get_pw_prompt(void)
 {
     if (prompt_string[0] == '\0')
-        return (NULL);
+        return NULL;
     else
-        return (prompt_string);
+        return prompt_string;
 }
 
 /*
@@ -49,7 +52,7 @@ int EVP_read_pw_string(char *buf, int len, const char *prompt, int verify)
 int EVP_read_pw_string_min(char *buf, int min, int len, const char *prompt,
                            int verify)
 {
-    int ret;
+    int ret = -1;
     char buff[BUFSIZ];
     UI *ui;
 
@@ -57,19 +60,20 @@ int EVP_read_pw_string_min(char *buf, int min, int len, const char *prompt,
         prompt = prompt_string;
     ui = UI_new();
     if (ui == NULL)
-        return -1;
-    UI_add_input_string(ui, prompt, 0, buf, min,
-                        (len >= BUFSIZ) ? BUFSIZ - 1 : len);
-    if (verify)
-        UI_add_verify_string(ui, prompt, 0,
-                             buff, min, (len >= BUFSIZ) ? BUFSIZ - 1 : len,
-                             buf);
+        return ret;
+    if (UI_add_input_string(ui, prompt, 0, buf, min,
+                            (len >= BUFSIZ) ? BUFSIZ - 1 : len) < 0
+        || (verify
+            && UI_add_verify_string(ui, prompt, 0, buff, min,
+                                    (len >= BUFSIZ) ? BUFSIZ - 1 : len,
+                                    buf) < 0))
+        goto end;
     ret = UI_process(ui);
-    UI_free(ui);
     OPENSSL_cleanse(buff, BUFSIZ);
+ end:
+    UI_free(ui);
     return ret;
 }
-#endif /* OPENSSL_NO_UI */
 
 int EVP_BytesToKey(const EVP_CIPHER *type, const EVP_MD *md,
                    const unsigned char *salt, const unsigned char *data,
@@ -87,7 +91,7 @@ int EVP_BytesToKey(const EVP_CIPHER *type, const EVP_MD *md,
     OPENSSL_assert(niv <= EVP_MAX_IV_LENGTH);
 
     if (data == NULL)
-        return (nkey);
+        return nkey;
 
     c = EVP_MD_CTX_new();
     if (c == NULL)

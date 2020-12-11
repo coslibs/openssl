@@ -1,7 +1,7 @@
 #! /usr/bin/env perl
-# Copyright 2013-2016 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2013-2020 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -42,9 +42,10 @@
 # (*)	Sandy/Ivy Bridge are known to handle high interleave factors
 #	suboptimally;
 
-$flavour = shift;
-$output  = shift;
-if ($flavour =~ /\./) { $output = $flavour; undef $flavour; }
+# $output is the last argument if it looks like a file (it has an extension)
+# $flavour is the first argument if it doesn't look like a file
+$output = $#ARGV >= 0 && $ARGV[$#ARGV] =~ m|\.\w+$| ? pop : undef;
+$flavour = $#ARGV >= 0 && $ARGV[0] !~ m|\.| ? shift : undef;
 
 $win64=0; $win64=1 if ($flavour =~ /[nm]asm|mingw64/ || $output =~ /\.asm$/);
 
@@ -52,6 +53,11 @@ $0 =~ m/(.*[\/\\])[^\/\\]+$/; $dir=$1;
 ( $xlate="${dir}x86_64-xlate.pl" and -f $xlate ) or
 ( $xlate="${dir}../../perlasm/x86_64-xlate.pl" and -f $xlate) or
 die "can't locate x86_64-xlate.pl";
+
+push(@INC,"${dir}","${dir}../../perlasm");
+require "x86_64-support.pl";
+
+$ptr_size=&pointer_size($flavour);
 
 $avx=0;
 
@@ -70,11 +76,12 @@ if (!$avx && $win64 && ($flavour =~ /masm/ || $ENV{ASM} =~ /ml64/) &&
 	$avx = ($1>=10) + ($1>=11);
 }
 
-if (!$avx && `$ENV{CC} -v 2>&1` =~ /((?:^clang|LLVM) version|.*based on LLVM) ([3-9]\.[0-9]+)/) {
+if (!$avx && `$ENV{CC} -v 2>&1` =~ /((?:clang|LLVM) version|.*based on LLVM) ([0-9]+\.[0-9]+)/) {
 	$avx = ($2>=3.0) + ($2>3.0);
 }
 
-open OUT,"| \"$^X\" \"$xlate\" $flavour \"$output\"";
+open OUT,"| \"$^X\" \"$xlate\" $flavour \"$output\""
+    or die "can't call $xlate: $!";
 *STDOUT=*OUT;
 
 # void aesni_multi_cbc_encrypt (
@@ -85,6 +92,8 @@ open OUT,"| \"$^X\" \"$xlate\" $flavour \"$output\"";
 $inp="%rdi";	# 1st arg
 $key="%rsi";	# 2nd arg
 $num="%edx";
+
+$inp_elm_size=2*$ptr_size+8+16;
 
 @inptr=map("%r$_",(8..11));
 @outptr=map("%r$_",(12..15));
@@ -105,6 +114,7 @@ $code.=<<___;
 .type	aesni_multi_cbc_encrypt,\@function,3
 .align	32
 aesni_multi_cbc_encrypt:
+.cfi_startproc
 ___
 $code.=<<___ if ($avx);
 	cmp	\$2,$num
@@ -118,12 +128,19 @@ $code.=<<___ if ($avx);
 ___
 $code.=<<___;
 	mov	%rsp,%rax
+.cfi_def_cfa_register	%rax
 	push	%rbx
+.cfi_push	%rbx
 	push	%rbp
+.cfi_push	%rbp
 	push	%r12
+.cfi_push	%r12
 	push	%r13
+.cfi_push	%r13
 	push	%r14
+.cfi_push	%r14
 	push	%r15
+.cfi_push	%r15
 ___
 $code.=<<___ if ($win64);
 	lea	-0xa8(%rsp),%rsp
@@ -148,25 +165,30 @@ $code.=<<___;
 	sub	\$48,%rsp
 	and	\$-64,%rsp
 	mov	%rax,16(%rsp)			# original %rsp
+.cfi_cfa_expression	%rsp+16,deref,+8
 
 .Lenc4x_body:
 	movdqu	($key),$zero			# 0-round key
 	lea	0x78($key),$key			# size optimization
-	lea	40*2($inp),$inp
+	lea	$inp_elm_size*2($inp),$inp
 
 .Lenc4x_loop_grande:
 	mov	$num,24(%rsp)			# original $num
 	xor	$num,$num
 ___
 for($i=0;$i<4;$i++) {
+    $inptr_reg=&pointer_register($flavour,@inptr[$i]);
+    $outptr_reg=&pointer_register($flavour,@outptr[$i]);
     $code.=<<___;
-	mov	`40*$i+16-40*2`($inp),$one	# borrow $one for number of blocks
-	mov	`40*$i+0-40*2`($inp),@inptr[$i]
+	# borrow $one for number of blocks
+	mov	`$inp_elm_size*$i+2*$ptr_size-$inp_elm_size*2`($inp),$one
+	mov	`$inp_elm_size*$i+0-$inp_elm_size*2`($inp),$inptr_reg
 	cmp	$num,$one
-	mov	`40*$i+8-40*2`($inp),@outptr[$i]
+	mov	`$inp_elm_size*$i+$ptr_size-$inp_elm_size*2`($inp),$outptr_reg
 	cmovg	$one,$num			# find maximum
 	test	$one,$one
-	movdqu	`40*$i+24-40*2`($inp),@out[$i]	# load IV
+	# load IV
+	movdqu	`$inp_elm_size*$i+2*$ptr_size+8-$inp_elm_size*2`($inp),@out[$i]
 	mov	$one,`32+4*$i`(%rsp)		# initialize counters
 	cmovle	%rsp,@inptr[$i]			# cancel input
 ___
@@ -319,18 +341,20 @@ $code.=<<___;
 	jnz	.Loop_enc4x
 
 	mov	16(%rsp),%rax			# original %rsp
+.cfi_def_cfa	%rax,8
 	mov	24(%rsp),$num
 
 	#pxor	@inp[0],@out[0]
 	#pxor	@inp[1],@out[1]
-	#movdqu	@out[0],`40*0+24-40*2`($inp)	# output iv FIX ME!
+	# output iv FIX ME!
+	#movdqu	@out[0],`$inp_elm_size*0+2*$ptr_size+8-$inp_elm_size*2`($inp)
 	#pxor	@inp[2],@out[2]
-	#movdqu	@out[1],`40*1+24-40*2`($inp)
+	#movdqu	@out[1],`$inp_elm_size*1+2*$ptr_size+8-$inp_elm_size*2`($inp)
 	#pxor	@inp[3],@out[3]
-	#movdqu	@out[2],`40*2+24-40*2`($inp)	# won't fix, let caller
-	#movdqu	@out[3],`40*3+24-40*2`($inp)	# figure this out...
+	#movdqu	@out[2],`$inp_elm_size*2+2*$ptr_size+8-$inp_elm_size*2`($inp)	# won't fix, let caller
+	#movdqu	@out[3],`$inp_elm_size*3+2*$ptr_size+8-$inp_elm_size*2`($inp)	# figure this out...
 
-	lea	`40*4`($inp),$inp
+	lea	`$inp_elm_size*4`($inp),$inp
 	dec	$num
 	jnz	.Lenc4x_loop_grande
 
@@ -350,20 +374,29 @@ $code.=<<___ if ($win64);
 ___
 $code.=<<___;
 	mov	-48(%rax),%r15
+.cfi_restore	%r15
 	mov	-40(%rax),%r14
+.cfi_restore	%r14
 	mov	-32(%rax),%r13
+.cfi_restore	%r13
 	mov	-24(%rax),%r12
+.cfi_restore	%r12
 	mov	-16(%rax),%rbp
+.cfi_restore	%rbp
 	mov	-8(%rax),%rbx
+.cfi_restore	%rbx
 	lea	(%rax),%rsp
+.cfi_def_cfa_register	%rsp
 .Lenc4x_epilogue:
 	ret
+.cfi_endproc
 .size	aesni_multi_cbc_encrypt,.-aesni_multi_cbc_encrypt
 
 .globl	aesni_multi_cbc_decrypt
 .type	aesni_multi_cbc_decrypt,\@function,3
 .align	32
 aesni_multi_cbc_decrypt:
+.cfi_startproc
 ___
 $code.=<<___ if ($avx);
 	cmp	\$2,$num
@@ -377,12 +410,19 @@ $code.=<<___ if ($avx);
 ___
 $code.=<<___;
 	mov	%rsp,%rax
+.cfi_def_cfa_register	%rax
 	push	%rbx
+.cfi_push	%rbx
 	push	%rbp
+.cfi_push	%rbp
 	push	%r12
+.cfi_push	%r12
 	push	%r13
+.cfi_push	%r13
 	push	%r14
+.cfi_push	%r14
 	push	%r15
+.cfi_push	%r15
 ___
 $code.=<<___ if ($win64);
 	lea	-0xa8(%rsp),%rsp
@@ -407,25 +447,30 @@ $code.=<<___;
 	sub	\$48,%rsp
 	and	\$-64,%rsp
 	mov	%rax,16(%rsp)			# original %rsp
+.cfi_cfa_expression	%rsp+16,deref,+8
 
 .Ldec4x_body:
 	movdqu	($key),$zero			# 0-round key
 	lea	0x78($key),$key			# size optimization
-	lea	40*2($inp),$inp
+	lea	$inp_elm_size*2($inp),$inp
 
 .Ldec4x_loop_grande:
 	mov	$num,24(%rsp)			# original $num
 	xor	$num,$num
 ___
 for($i=0;$i<4;$i++) {
+    $inptr_reg=&pointer_register($flavour,@inptr[$i]);
+    $outptr_reg=&pointer_register($flavour,@outptr[$i]);
     $code.=<<___;
-	mov	`40*$i+16-40*2`($inp),$one	# borrow $one for number of blocks
-	mov	`40*$i+0-40*2`($inp),@inptr[$i]
+	# borrow $one for number of blocks
+	mov	`$inp_elm_size*$i+2*$ptr_size-$inp_elm_size*2`($inp),$one
+	mov	`$inp_elm_size*$i+0-$inp_elm_size*2`($inp),$inptr_reg
 	cmp	$num,$one
-	mov	`40*$i+8-40*2`($inp),@outptr[$i]
+	mov	`$inp_elm_size*$i+$ptr_size-$inp_elm_size*2`($inp),$outptr_reg
 	cmovg	$one,$num			# find maximum
 	test	$one,$one
-	movdqu	`40*$i+24-40*2`($inp),@inp[$i]	# load IV
+	# load IV
+	movdqu	`$inp_elm_size*$i+2*$ptr_size+8-$inp_elm_size*2`($inp),@inp[$i]
 	mov	$one,`32+4*$i`(%rsp)		# initialize counters
 	cmovle	%rsp,@inptr[$i]			# cancel input
 ___
@@ -578,9 +623,10 @@ $code.=<<___;
 	jnz	.Loop_dec4x
 
 	mov	16(%rsp),%rax			# original %rsp
+.cfi_def_cfa	%rax,8
 	mov	24(%rsp),$num
 
-	lea	`40*4`($inp),$inp
+	lea	`$inp_elm_size*4`($inp),$inp
 	dec	$num
 	jnz	.Ldec4x_loop_grande
 
@@ -600,14 +646,22 @@ $code.=<<___ if ($win64);
 ___
 $code.=<<___;
 	mov	-48(%rax),%r15
+.cfi_restore	%r15
 	mov	-40(%rax),%r14
+.cfi_restore	%r14
 	mov	-32(%rax),%r13
+.cfi_restore	%r13
 	mov	-24(%rax),%r12
+.cfi_restore	%r12
 	mov	-16(%rax),%rbp
+.cfi_restore	%rbp
 	mov	-8(%rax),%rbx
+.cfi_restore	%rbx
 	lea	(%rax),%rsp
+.cfi_def_cfa_register	%rsp
 .Ldec4x_epilogue:
 	ret
+.cfi_endproc
 .size	aesni_multi_cbc_decrypt,.-aesni_multi_cbc_decrypt
 ___
 
@@ -623,14 +677,22 @@ $code.=<<___;
 .type	aesni_multi_cbc_encrypt_avx,\@function,3
 .align	32
 aesni_multi_cbc_encrypt_avx:
+.cfi_startproc
 _avx_cbc_enc_shortcut:
 	mov	%rsp,%rax
+.cfi_def_cfa_register	%rax
 	push	%rbx
+.cfi_push	%rbx
 	push	%rbp
+.cfi_push	%rbp
 	push	%r12
+.cfi_push	%r12
 	push	%r13
+.cfi_push	%r13
 	push	%r14
+.cfi_push	%r14
 	push	%r15
+.cfi_push	%r15
 ___
 $code.=<<___ if ($win64);
 	lea	-0xa8(%rsp),%rsp
@@ -657,12 +719,13 @@ $code.=<<___;
 	sub	\$192,%rsp
 	and	\$-128,%rsp
 	mov	%rax,16(%rsp)			# original %rsp
+.cfi_cfa_expression	%rsp+16,deref,+8
 
 .Lenc8x_body:
 	vzeroupper
 	vmovdqu	($key),$zero			# 0-round key
 	lea	0x78($key),$key			# size optimization
-	lea	40*4($inp),$inp
+	lea	`$inp_elm_size*4`($inp),$inp
 	shr	\$1,$num
 
 .Lenc8x_loop_grande:
@@ -671,14 +734,20 @@ $code.=<<___;
 ___
 for($i=0;$i<8;$i++) {
   my $temp = $i ? $offload : $offset;
+    $ptr_reg=&pointer_register($flavour,@ptr[$i]);
+    $temp_reg=&pointer_register($flavour,$temp);
     $code.=<<___;
-	mov	`40*$i+16-40*4`($inp),$one	# borrow $one for number of blocks
-	mov	`40*$i+0-40*4`($inp),@ptr[$i]	# input pointer
+	# borrow $one for number of blocks
+	mov	`$inp_elm_size*$i+2*$ptr_size-$inp_elm_size*4`($inp),$one
+	# input pointer
+	mov	`$inp_elm_size*$i+0-$inp_elm_size*4`($inp),$ptr_reg
 	cmp	$num,$one
-	mov	`40*$i+8-40*4`($inp),$temp	# output pointer
+	# output pointer
+	mov	`$inp_elm_size*$i+$ptr_size-$inp_elm_size*4`($inp),$temp_reg
 	cmovg	$one,$num			# find maximum
 	test	$one,$one
-	vmovdqu	`40*$i+24-40*4`($inp),@out[$i]	# load IV
+	# load IV
+	vmovdqu	`$inp_elm_size*$i+2*$ptr_size+8-$inp_elm_size*4`($inp),@out[$i]
 	mov	$one,`32+4*$i`(%rsp)		# initialize counters
 	cmovle	%rsp,@ptr[$i]			# cancel input
 	sub	@ptr[$i],$temp			# distance between input and output
@@ -861,8 +930,9 @@ $code.=<<___;
 	jnz	.Loop_enc8x
 
 	mov	16(%rsp),%rax			# original %rsp
+.cfi_def_cfa	%rax,8
 	#mov	24(%rsp),$num
-	#lea	`40*8`($inp),$inp
+	#lea	`$inp_elm_size*8`($inp),$inp
 	#dec	$num
 	#jnz	.Lenc8x_loop_grande
 
@@ -883,27 +953,43 @@ $code.=<<___ if ($win64);
 ___
 $code.=<<___;
 	mov	-48(%rax),%r15
+.cfi_restore	%r15
 	mov	-40(%rax),%r14
+.cfi_restore	%r14
 	mov	-32(%rax),%r13
+.cfi_restore	%r13
 	mov	-24(%rax),%r12
+.cfi_restore	%r12
 	mov	-16(%rax),%rbp
+.cfi_restore	%rbp
 	mov	-8(%rax),%rbx
+.cfi_restore	%rbx
 	lea	(%rax),%rsp
+.cfi_def_cfa_register	%rsp
 .Lenc8x_epilogue:
 	ret
+.cfi_endproc
 .size	aesni_multi_cbc_encrypt_avx,.-aesni_multi_cbc_encrypt_avx
 
 .type	aesni_multi_cbc_decrypt_avx,\@function,3
 .align	32
 aesni_multi_cbc_decrypt_avx:
+.cfi_startproc
 _avx_cbc_dec_shortcut:
 	mov	%rsp,%rax
+.cfi_def_cfa_register	%rax
 	push	%rbx
+.cfi_push	%rbx
 	push	%rbp
+.cfi_push	%rbp
 	push	%r12
+.cfi_push	%r12
 	push	%r13
+.cfi_push	%r13
 	push	%r14
+.cfi_push	%r14
 	push	%r15
+.cfi_push	%r15
 ___
 $code.=<<___ if ($win64);
 	lea	-0xa8(%rsp),%rsp
@@ -932,12 +1018,13 @@ $code.=<<___;
 	and	\$-256,%rsp
 	sub	\$192,%rsp
 	mov	%rax,16(%rsp)			# original %rsp
+.cfi_cfa_expression	%rsp+16,deref,+8
 
 .Ldec8x_body:
 	vzeroupper
 	vmovdqu	($key),$zero			# 0-round key
 	lea	0x78($key),$key			# size optimization
-	lea	40*4($inp),$inp
+	lea	`$inp_elm_size*4`($inp),$inp
 	shr	\$1,$num
 
 .Ldec8x_loop_grande:
@@ -946,14 +1033,20 @@ $code.=<<___;
 ___
 for($i=0;$i<8;$i++) {
   my $temp = $i ? $offload : $offset;
+    $ptr_reg=&pointer_register($flavour,@ptr[$i]);
+    $temp_reg=&pointer_register($flavour,$temp);
     $code.=<<___;
-	mov	`40*$i+16-40*4`($inp),$one	# borrow $one for number of blocks
-	mov	`40*$i+0-40*4`($inp),@ptr[$i]	# input pointer
+	# borrow $one for number of blocks
+	mov	`$inp_elm_size*$i+2*$ptr_size-$inp_elm_size*4`($inp),$one
+	# input pointer
+	mov	`$inp_elm_size*$i+0-$inp_elm_size*4`($inp),$ptr_reg
 	cmp	$num,$one
-	mov	`40*$i+8-40*4`($inp),$temp	# output pointer
+	# output pointer
+	mov	`$inp_elm_size*$i+$ptr_size-$inp_elm_size*4`($inp),$temp_reg
 	cmovg	$one,$num			# find maximum
 	test	$one,$one
-	vmovdqu	`40*$i+24-40*4`($inp),@out[$i]	# load IV
+	# load IV
+	vmovdqu	`$inp_elm_size*$i+2*$ptr_size+8-$inp_elm_size*4`($inp),@out[$i]
 	mov	$one,`32+4*$i`(%rsp)		# initialize counters
 	cmovle	%rsp,@ptr[$i]			# cancel input
 	sub	@ptr[$i],$temp			# distance between input and output
@@ -1167,8 +1260,9 @@ $code.=<<___;
 	jnz	.Loop_dec8x
 
 	mov	16(%rsp),%rax			# original %rsp
+.cfi_def_cfa	%rax,8
 	#mov	24(%rsp),$num
-	#lea	`40*8`($inp),$inp
+	#lea	`$inp_elm_size*8`($inp),$inp
 	#dec	$num
 	#jnz	.Ldec8x_loop_grande
 
@@ -1189,14 +1283,22 @@ $code.=<<___ if ($win64);
 ___
 $code.=<<___;
 	mov	-48(%rax),%r15
+.cfi_restore	%r15
 	mov	-40(%rax),%r14
+.cfi_restore	%r14
 	mov	-32(%rax),%r13
+.cfi_restore	%r13
 	mov	-24(%rax),%r12
+.cfi_restore	%r12
 	mov	-16(%rax),%rbp
+.cfi_restore	%rbp
 	mov	-8(%rax),%rbx
+.cfi_restore	%rbx
 	lea	(%rax),%rsp
+.cfi_def_cfa_register	%rsp
 .Ldec8x_epilogue:
 	ret
+.cfi_endproc
 .size	aesni_multi_cbc_decrypt_avx,.-aesni_multi_cbc_decrypt_avx
 ___
 						}}}
@@ -1253,10 +1355,10 @@ se_handler:
 	mov	-48(%rax),%r15
 	mov	%rbx,144($context)	# restore context->Rbx
 	mov	%rbp,160($context)	# restore context->Rbp
-	mov	%r12,216($context)	# restore cotnext->R12
-	mov	%r13,224($context)	# restore cotnext->R13
-	mov	%r14,232($context)	# restore cotnext->R14
-	mov	%r15,240($context)	# restore cotnext->R15
+	mov	%r12,216($context)	# restore context->R12
+	mov	%r13,224($context)	# restore context->R13
+	mov	%r14,232($context)	# restore context->R14
+	mov	%r15,240($context)	# restore context->R15
 
 	lea	-56-10*16(%rax),%rsi
 	lea	512($context),%rdi	# &context.Xmm6
@@ -1399,4 +1501,4 @@ $code =~ s/\`([^\`]*)\`/eval($1)/gem;
 $code =~ s/\b(aes.*%xmm[0-9]+).*$/aesni($1)/gem;
 
 print $code;
-close STDOUT;
+close STDOUT or die "error closing STDOUT: $!";

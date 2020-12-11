@@ -1,14 +1,14 @@
 /*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
-#include <ctype.h>
+#include "crypto/ctype.h"
 #include "internal/cryptlib.h"
 #include <openssl/buffer.h>
 #include <openssl/asn1.h>
@@ -20,7 +20,7 @@ int i2a_ASN1_STRING(BIO *bp, const ASN1_STRING *a, int type)
     char buf[2];
 
     if (a == NULL)
-        return (0);
+        return 0;
 
     if (a->length == 0) {
         if (BIO_write(bp, "0", 1) != 1)
@@ -40,14 +40,14 @@ int i2a_ASN1_STRING(BIO *bp, const ASN1_STRING *a, int type)
             n += 2;
         }
     }
-    return (n);
+    return n;
  err:
-    return (-1);
+    return -1;
 }
 
 int a2i_ASN1_STRING(BIO *bp, ASN1_STRING *bs, char *buf, int size)
 {
-    int i, j, k, m, n, again, bufsize, spec_char;
+    int i, j, k, m, n, again, bufsize;
     unsigned char *s = NULL, *sp;
     unsigned char *bufp;
     int num = 0, slen = 0, first = 1;
@@ -74,19 +74,7 @@ int a2i_ASN1_STRING(BIO *bp, ASN1_STRING *bs, char *buf, int size)
         again = (buf[i - 1] == '\\');
 
         for (j = i - 1; j > 0; j--) {
-#ifndef CHARSET_EBCDIC
-            spec_char = (!(((buf[j] >= '0') && (buf[j] <= '9')) ||
-                  ((buf[j] >= 'a') && (buf[j] <= 'f')) ||
-                  ((buf[j] >= 'A') && (buf[j] <= 'F'))));
-#else
-            /*
-             * This #ifdef is not strictly necessary, since the characters
-             * A...F a...f 0...9 are contiguous (yes, even in EBCDIC - but
-             * not the whole alphabet). Nevertheless, isxdigit() is faster.
-             */
-            spec_char = (!isxdigit(buf[j]));
-#endif
-            if (spec_char) {
+            if (!ossl_isxdigit(buf[j])) {
                 i = j;
                 break;
             }
@@ -103,7 +91,7 @@ int a2i_ASN1_STRING(BIO *bp, ASN1_STRING *bs, char *buf, int size)
         k = 0;
         i -= again;
         if (i % 2 != 0) {
-            ASN1err(ASN1_F_A2I_ASN1_STRING, ASN1_R_ODD_NUMBER_OF_CHARS);
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_ODD_NUMBER_OF_CHARS);
             OPENSSL_free(s);
             return 0;
         }
@@ -111,7 +99,7 @@ int a2i_ASN1_STRING(BIO *bp, ASN1_STRING *bs, char *buf, int size)
         if (num + i > slen) {
             sp = OPENSSL_realloc(s, (unsigned int)num + i * 2);
             if (sp == NULL) {
-                ASN1err(ASN1_F_A2I_ASN1_STRING, ERR_R_MALLOC_FAILURE);
+                ERR_raise(ERR_LIB_ASN1, ERR_R_MALLOC_FAILURE);
                 OPENSSL_free(s);
                 return 0;
             }
@@ -122,8 +110,7 @@ int a2i_ASN1_STRING(BIO *bp, ASN1_STRING *bs, char *buf, int size)
             for (n = 0; n < 2; n++) {
                 m = OPENSSL_hexchar2int(bufp[k + n]);
                 if (m < 0) {
-                    ASN1err(ASN1_F_A2I_ASN1_STRING,
-                            ASN1_R_NON_HEX_CHARACTERS);
+                    ERR_raise(ERR_LIB_ASN1, ASN1_R_NON_HEX_CHARACTERS);
                     OPENSSL_free(s);
                     return 0;
                 }
@@ -142,7 +129,7 @@ int a2i_ASN1_STRING(BIO *bp, ASN1_STRING *bs, char *buf, int size)
     return 1;
 
  err:
-    ASN1err(ASN1_F_A2I_ASN1_STRING, ASN1_R_SHORT_LINE);
+    ERR_raise(ERR_LIB_ASN1, ASN1_R_SHORT_LINE);
     OPENSSL_free(s);
     return 0;
 }

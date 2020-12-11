@@ -1,21 +1,22 @@
 /*
- * Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2001-2020 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
 
-/* ====================================================================
- * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
- * Portions of this software developed by SUN MICROSYSTEMS, INC.,
- * and contributed to the OpenSSL project.
+/*
+ * ECDSA low level APIs are deprecated for public use, but still ok for
+ * internal use.
  */
+#include "internal/deprecated.h"
 
 #include <openssl/err.h>
 
-#include "ec_lcl.h"
+#include "ec_local.h"
 
 const EC_METHOD *EC_GFp_mont_method(void)
 {
@@ -36,8 +37,6 @@ const EC_METHOD *EC_GFp_mont_method(void)
         ec_GFp_simple_point_clear_finish,
         ec_GFp_simple_point_copy,
         ec_GFp_simple_point_set_to_infinity,
-        ec_GFp_simple_set_Jprojective_coordinates_GFp,
-        ec_GFp_simple_get_Jprojective_coordinates_GFp,
         ec_GFp_simple_point_set_affine_coordinates,
         ec_GFp_simple_point_get_affine_coordinates,
         0, 0, 0,
@@ -55,6 +54,7 @@ const EC_METHOD *EC_GFp_mont_method(void)
         ec_GFp_mont_field_mul,
         ec_GFp_mont_field_sqr,
         0 /* field_div */ ,
+        ec_GFp_mont_field_inv,
         ec_GFp_mont_field_encode,
         ec_GFp_mont_field_decode,
         ec_GFp_mont_field_set_to_one,
@@ -66,7 +66,15 @@ const EC_METHOD *EC_GFp_mont_method(void)
         ec_key_simple_generate_public_key,
         0, /* keycopy */
         0, /* keyfinish */
-        ecdh_simple_compute_key
+        ecdh_simple_compute_key,
+        ecdsa_simple_sign_setup,
+        ecdsa_simple_sign_sig,
+        ecdsa_simple_verify_sig,
+        0, /* field_inverse_mod_ord */
+        ec_GFp_simple_blind_coordinates,
+        ec_GFp_simple_ladder_pre,
+        ec_GFp_simple_ladder_step,
+        ec_GFp_simple_ladder_post
     };
 
     return &ret;
@@ -145,7 +153,7 @@ int ec_GFp_mont_group_set_curve(EC_GROUP *group, const BIGNUM *p,
     group->field_data2 = NULL;
 
     if (ctx == NULL) {
-        ctx = new_ctx = BN_CTX_new();
+        ctx = new_ctx = BN_CTX_new_ex(group->libctx);
         if (ctx == NULL)
             return 0;
     }
@@ -154,7 +162,7 @@ int ec_GFp_mont_group_set_curve(EC_GROUP *group, const BIGNUM *p,
     if (mont == NULL)
         goto err;
     if (!BN_MONT_CTX_set(mont, p, ctx)) {
-        ECerr(EC_F_EC_GFP_MONT_GROUP_SET_CURVE, ERR_R_BN_LIB);
+        ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
         goto err;
     }
     one = BN_new();
@@ -188,7 +196,7 @@ int ec_GFp_mont_field_mul(const EC_GROUP *group, BIGNUM *r, const BIGNUM *a,
                           const BIGNUM *b, BN_CTX *ctx)
 {
     if (group->field_data1 == NULL) {
-        ECerr(EC_F_EC_GFP_MONT_FIELD_MUL, EC_R_NOT_INITIALIZED);
+        ERR_raise(ERR_LIB_EC, EC_R_NOT_INITIALIZED);
         return 0;
     }
 
@@ -199,18 +207,67 @@ int ec_GFp_mont_field_sqr(const EC_GROUP *group, BIGNUM *r, const BIGNUM *a,
                           BN_CTX *ctx)
 {
     if (group->field_data1 == NULL) {
-        ECerr(EC_F_EC_GFP_MONT_FIELD_SQR, EC_R_NOT_INITIALIZED);
+        ERR_raise(ERR_LIB_EC, EC_R_NOT_INITIALIZED);
         return 0;
     }
 
     return BN_mod_mul_montgomery(r, a, a, group->field_data1, ctx);
 }
 
+/*-
+ * Computes the multiplicative inverse of a in GF(p), storing the result in r.
+ * If a is zero (or equivalent), you'll get a EC_R_CANNOT_INVERT error.
+ * We have a Mont structure, so SCA hardening is FLT inversion.
+ */
+int ec_GFp_mont_field_inv(const EC_GROUP *group, BIGNUM *r, const BIGNUM *a,
+                            BN_CTX *ctx)
+{
+    BIGNUM *e = NULL;
+    BN_CTX *new_ctx = NULL;
+    int ret = 0;
+
+    if (group->field_data1 == NULL)
+        return 0;
+
+    if (ctx == NULL
+            && (ctx = new_ctx = BN_CTX_secure_new_ex(group->libctx)) == NULL)
+        return 0;
+
+    BN_CTX_start(ctx);
+    if ((e = BN_CTX_get(ctx)) == NULL)
+        goto err;
+
+    /* Inverse in constant time with Fermats Little Theorem */
+    if (!BN_set_word(e, 2))
+        goto err;
+    if (!BN_sub(e, group->field, e))
+        goto err;
+    /*-
+     * Exponent e is public.
+     * No need for scatter-gather or BN_FLG_CONSTTIME.
+     */
+    if (!BN_mod_exp_mont(r, a, e, group->field, ctx, group->field_data1))
+        goto err;
+
+    /* throw an error on zero */
+    if (BN_is_zero(r)) {
+        ERR_raise(ERR_LIB_EC, EC_R_CANNOT_INVERT);
+        goto err;
+    }
+
+    ret = 1;
+
+  err:
+    BN_CTX_end(ctx);
+    BN_CTX_free(new_ctx);
+    return ret;
+}
+
 int ec_GFp_mont_field_encode(const EC_GROUP *group, BIGNUM *r,
                              const BIGNUM *a, BN_CTX *ctx)
 {
     if (group->field_data1 == NULL) {
-        ECerr(EC_F_EC_GFP_MONT_FIELD_ENCODE, EC_R_NOT_INITIALIZED);
+        ERR_raise(ERR_LIB_EC, EC_R_NOT_INITIALIZED);
         return 0;
     }
 
@@ -221,7 +278,7 @@ int ec_GFp_mont_field_decode(const EC_GROUP *group, BIGNUM *r,
                              const BIGNUM *a, BN_CTX *ctx)
 {
     if (group->field_data1 == NULL) {
-        ECerr(EC_F_EC_GFP_MONT_FIELD_DECODE, EC_R_NOT_INITIALIZED);
+        ERR_raise(ERR_LIB_EC, EC_R_NOT_INITIALIZED);
         return 0;
     }
 
@@ -232,7 +289,7 @@ int ec_GFp_mont_field_set_to_one(const EC_GROUP *group, BIGNUM *r,
                                  BN_CTX *ctx)
 {
     if (group->field_data2 == NULL) {
-        ECerr(EC_F_EC_GFP_MONT_FIELD_SET_TO_ONE, EC_R_NOT_INITIALIZED);
+        ERR_raise(ERR_LIB_EC, EC_R_NOT_INITIALIZED);
         return 0;
     }
 

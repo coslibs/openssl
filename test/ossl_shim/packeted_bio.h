@@ -1,26 +1,17 @@
 /*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
 
-#ifndef HEADER_PACKETED_BIO
-#define HEADER_PACKETED_BIO
+#ifndef OSSL_TEST_SHIM_PACKETED_BIO_H
+#define OSSL_TEST_SHIM_PACKETED_BIO_H
 
 #include <openssl/base.h>
 #include <openssl/bio.h>
-
-#if defined(OPENSSL_SYS_WINDOWS)
-OPENSSL_MSVC_PRAGMA(warning(push, 3))
-#include <winsock2.h>
-OPENSSL_MSVC_PRAGMA(warning(pop))
-#else
-#include <sys/time.h>
-#endif
-
 
 // PacketedBioCreate creates a filter BIO which implements a reliable in-order
 // blocking datagram socket. It internally maintains a clock and honors
@@ -41,4 +32,4 @@ timeval PacketedBioGetClock(const BIO *bio);
 bool PacketedBioAdvanceClock(BIO *bio);
 
 
-#endif  // HEADER_PACKETED_BIO
+#endif  // OSSL_TEST_SHIM_PACKETED_BIO_H

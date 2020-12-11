@@ -1,7 +1,7 @@
 #! /usr/bin/env perl
-# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -76,11 +76,9 @@ my @sha_tests =
        expected => '$6$rounds=1000$roundstoolow$kUMsbe306n21p9R.FRkW3IGn.S9NPN0x50YhH1xhLsPuWGsUSklZt58jaTfF4ZEQpyUNGc0dqbpBYYBaHHrsX.' }
     );
 
-plan tests => (disabled("des") ? 8 : 10) + scalar @sha_tests;
+plan tests => 9 + scalar @sha_tests;
 
 
-ok(compare1stline_re([qw{openssl passwd password}], '^.{13}\R$'),
-   'crypt password with random salt') if !disabled("des");
 ok(compare1stline_re([qw{openssl passwd -1 password}], '^\$1\$.{8}\$.{22}\R$'),
    'BSD style MD5 password with random salt');
 ok(compare1stline_re([qw{openssl passwd -apr1 password}], '^\$apr1\$.{8}\$.{22}\R$'),
@@ -90,12 +88,12 @@ ok(compare1stline_re([qw{openssl passwd -5 password}], '^\$5\$.{16}\$.{43}\R$'),
 ok(compare1stline_re([qw{openssl passwd -6 password}], '^\$6\$.{16}\$.{86}\R$'),
    'Apache SHA512 password with random salt');
 
-ok(compare1stline([qw{openssl passwd -salt xx password}], 'xxj31ZMTZzkVA'),
-   'crypt password with salt xx') if !disabled("des");
 ok(compare1stline([qw{openssl passwd -salt xxxxxxxx -1 password}], '$1$xxxxxxxx$UYCIxa628.9qXjpQCjM4a.'),
    'BSD style MD5 password with salt xxxxxxxx');
 ok(compare1stline([qw{openssl passwd -salt xxxxxxxx -apr1 password}], '$apr1$xxxxxxxx$dxHfLAsjHkDRmG83UXe8K0'),
    'Apache style MD5 password with salt xxxxxxxx');
+ok(compare1stline([qw{openssl passwd -salt xxxxxxxx -aixmd5 password}], 'xxxxxxxx$8Oaipk/GPKhC64w/YVeFD/'),
+   'AIX style MD5 password with salt xxxxxxxx');
 ok(compare1stline([qw{openssl passwd -salt xxxxxxxxxxxxxxxx -5 password}], '$5$xxxxxxxxxxxxxxxx$fHytsM.wVD..zPN/h3i40WJRggt/1f73XkAC/gkelkB'),
    'SHA256 password with salt xxxxxxxxxxxxxxxx');
 ok(compare1stline([qw{openssl passwd -salt xxxxxxxxxxxxxxxx -6 password}], '$6$xxxxxxxxxxxxxxxx$VjGUrXBG6/8yW0f6ikBJVOb/lK/Tm9LxHJmFfwMvT7cpk64N9BW7ZQhNeMXAYFbOJ6HDG7wb0QpxJyYQn0rh81'),

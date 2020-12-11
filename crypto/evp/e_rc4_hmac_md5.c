@@ -1,12 +1,19 @@
 /*
- * Copyright 2011-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2011-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
 
+/*
+ * MD5 and RC4 low level APIs are deprecated for public use, but still ok for
+ * internal use.
+ */
+#include "internal/deprecated.h"
+
+#include <internal/cryptlib.h>
 #include <openssl/opensslconf.h>
 
 #include <stdio.h>
@@ -19,16 +26,7 @@
 # include <openssl/objects.h>
 # include <openssl/rc4.h>
 # include <openssl/md5.h>
-# include "internal/evp_int.h"
-
-# ifndef EVP_CIPH_FLAG_AEAD_CIPHER
-#  define EVP_CIPH_FLAG_AEAD_CIPHER       0x200000
-#  define EVP_CTRL_AEAD_TLS1_AAD          0x16
-#  define EVP_CTRL_AEAD_SET_MAC_KEY       0x17
-# endif
-
-/* FIXME: surely this is available elsewhere? */
-# define EVP_RC4_KEY_SIZE                16
+# include "crypto/evp.h"
 
 typedef struct {
     RC4_KEY ks;
@@ -60,7 +58,7 @@ static int rc4_hmac_md5_init_key(EVP_CIPHER_CTX *ctx,
     return 1;
 }
 
-# if     defined(RC4_ASM) && defined(MD5_ASM) &&     (	   \
+# if     defined(RC4_ASM) && defined(MD5_ASM) &&     (     \
         defined(__x86_64)       || defined(__x86_64__)  || \
         defined(_M_AMD64)       || defined(_M_X64)      )
 #  define STITCHED_CALL
@@ -80,7 +78,6 @@ static int rc4_hmac_md5_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
                                                        * rc4_md5-x86_64.pl */
         md5_off = MD5_CBLOCK - key->md.num, blocks;
     unsigned int l;
-    extern unsigned int OPENSSL_ia32cap_P[];
 # endif
     size_t plen = key->payload_length;
 
@@ -228,6 +225,8 @@ static int rc4_hmac_md5_ctrl(EVP_CIPHER_CTX *ctx, int type, int arg,
             len = p[arg - 2] << 8 | p[arg - 1];
 
             if (!EVP_CIPHER_CTX_encrypting(ctx)) {
+                if (len < MD5_DIGEST_LENGTH)
+                    return -1;
                 len -= MD5_DIGEST_LENGTH;
                 p[arg - 2] = len >> 8;
                 p[arg - 1] = len;
@@ -264,6 +263,6 @@ static EVP_CIPHER r4_hmac_md5_cipher = {
 
 const EVP_CIPHER *EVP_rc4_hmac_md5(void)
 {
-    return (&r4_hmac_md5_cipher);
+    return &r4_hmac_md5_cipher;
 }
 #endif

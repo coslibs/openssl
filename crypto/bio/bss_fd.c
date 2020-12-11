@@ -1,7 +1,7 @@
 /*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <errno.h>
 
-#include "bio_lcl.h"
+#include "bio_local.h"
 
 #if defined(OPENSSL_NO_POSIX_IO)
 /*
@@ -58,7 +58,8 @@ static int fd_free(BIO *data);
 int BIO_fd_should_retry(int s);
 
 static const BIO_METHOD methods_fdp = {
-    BIO_TYPE_FD, "file descriptor",
+    BIO_TYPE_FD,
+    "file descriptor",
     /* TODO: Convert to new style write function */
     bwrite_conv,
     fd_write,
@@ -70,12 +71,12 @@ static const BIO_METHOD methods_fdp = {
     fd_ctrl,
     fd_new,
     fd_free,
-    NULL,
+    NULL,                       /* fd_callback_ctrl */
 };
 
 const BIO_METHOD *BIO_s_fd(void)
 {
-    return (&methods_fdp);
+    return &methods_fdp;
 }
 
 BIO *BIO_new_fd(int fd, int close_flag)
@@ -83,9 +84,9 @@ BIO *BIO_new_fd(int fd, int close_flag)
     BIO *ret;
     ret = BIO_new(BIO_s_fd());
     if (ret == NULL)
-        return (NULL);
+        return NULL;
     BIO_set_fd(ret, fd, close_flag);
-    return (ret);
+    return ret;
 }
 
 static int fd_new(BIO *bi)
@@ -93,22 +94,22 @@ static int fd_new(BIO *bi)
     bi->init = 0;
     bi->num = -1;
     bi->ptr = NULL;
-    bi->flags = BIO_FLAGS_UPLINK; /* essentially redundant */
-    return (1);
+    bi->flags = BIO_FLAGS_UPLINK_INTERNAL; /* essentially redundant */
+    return 1;
 }
 
 static int fd_free(BIO *a)
 {
     if (a == NULL)
-        return (0);
+        return 0;
     if (a->shutdown) {
         if (a->init) {
             UP_close(a->num);
         }
         a->init = 0;
-        a->flags = BIO_FLAGS_UPLINK;
+        a->flags = BIO_FLAGS_UPLINK_INTERNAL;
     }
-    return (1);
+    return 1;
 }
 
 static int fd_read(BIO *b, char *out, int outl)
@@ -122,9 +123,11 @@ static int fd_read(BIO *b, char *out, int outl)
         if (ret <= 0) {
             if (BIO_fd_should_retry(ret))
                 BIO_set_retry_read(b);
+            else if (ret == 0)
+                b->flags |= BIO_FLAGS_IN_EOF;
         }
     }
-    return (ret);
+    return ret;
 }
 
 static int fd_write(BIO *b, const char *in, int inl)
@@ -137,7 +140,7 @@ static int fd_write(BIO *b, const char *in, int inl)
         if (BIO_fd_should_retry(ret))
             BIO_set_retry_write(b);
     }
-    return (ret);
+    return ret;
 }
 
 static long fd_ctrl(BIO *b, int cmd, long num, void *ptr)
@@ -148,6 +151,7 @@ static long fd_ctrl(BIO *b, int cmd, long num, void *ptr)
     switch (cmd) {
     case BIO_CTRL_RESET:
         num = 0;
+        /* fall thru */
     case BIO_C_FILE_SEEK:
         ret = (long)UP_lseek(b->num, num, 0);
         break;
@@ -184,11 +188,14 @@ static long fd_ctrl(BIO *b, int cmd, long num, void *ptr)
     case BIO_CTRL_FLUSH:
         ret = 1;
         break;
+    case BIO_CTRL_EOF:
+        ret = (b->flags & BIO_FLAGS_IN_EOF) != 0 ? 1 : 0;
+        break;
     default:
         ret = 0;
         break;
     }
-    return (ret);
+    return ret;
 }
 
 static int fd_puts(BIO *bp, const char *str)
@@ -197,7 +204,7 @@ static int fd_puts(BIO *bp, const char *str)
 
     n = strlen(str);
     ret = fd_write(bp, str, n);
-    return (ret);
+    return ret;
 }
 
 static int fd_gets(BIO *bp, char *buf, int size)
@@ -206,14 +213,16 @@ static int fd_gets(BIO *bp, char *buf, int size)
     char *ptr = buf;
     char *end = buf + size - 1;
 
-    while ((ptr < end) && (fd_read(bp, ptr, 1) > 0) && (ptr[0] != '\n'))
-        ptr++;
+    while (ptr < end && fd_read(bp, ptr, 1) > 0) {
+        if (*ptr++ == '\n')
+           break;
+    }
 
     ptr[0] = '\0';
 
     if (buf[0] != '\0')
         ret = strlen(buf);
-    return (ret);
+    return ret;
 }
 
 int BIO_fd_should_retry(int i)
@@ -223,9 +232,9 @@ int BIO_fd_should_retry(int i)
     if ((i == 0) || (i == -1)) {
         err = get_last_sys_error();
 
-        return (BIO_fd_non_fatal_error(err));
+        return BIO_fd_non_fatal_error(err);
     }
-    return (0);
+    return 0;
 }
 
 int BIO_fd_non_fatal_error(int err)
@@ -267,11 +276,10 @@ int BIO_fd_non_fatal_error(int err)
 # ifdef EALREADY
     case EALREADY:
 # endif
-        return (1);
-        /* break; */
+        return 1;
     default:
         break;
     }
-    return (0);
+    return 0;
 }
 #endif

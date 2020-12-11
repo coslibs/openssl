@@ -1,14 +1,14 @@
 #! /usr/bin/env perl
-# Copyright 2005-2016 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2005-2020 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
 
 
 # ====================================================================
-# Written by Andy Polyakov <appro@fy.chalmers.se> for the OpenSSL
+# Written by Andy Polyakov <appro@openssl.org> for the OpenSSL
 # project. The module is, however, dual licensed under OpenSSL and
 # CRYPTOGAMS licenses depending on where you obtain it. For further
 # details see http://www.openssl.org/~appro/cryptogams/.
@@ -37,10 +37,9 @@ $0 =~ m/(.*[\/\\])[^\/\\]+$/; $dir=$1;
 push(@INC,"${dir}","${dir}../../perlasm");
 require "x86asm.pl";
 
-$output = pop;
-open STDOUT,">$output";
+$output = pop and open STDOUT,">$output";
 
-&asm_init($ARGV[0],$0);
+&asm_init($ARGV[0]);
 
 $sse2=0;
 for (@ARGV) { $sse2=1 if (/-DOPENSSL_IA32_SSE2/); }
@@ -78,7 +77,7 @@ $frame=32;				# size of above frame rounded up to 16n
 	&lea	("ebp",&DWP(-$frame,"esp","edi",4));	# future alloca($frame+4*(num+2))
 	&neg	("edi");
 
-	# minimize cache contention by arraning 2K window between stack
+	# minimize cache contention by arranging 2K window between stack
 	# pointer and ap argument [np is also position sensitive vector,
 	# but it's assumed to be near ap, as it's allocated at ~same
 	# time].
@@ -604,16 +603,18 @@ $sbit=$num;
 	&jge	(&label("sub"));
 
 	&sbb	("eax",0);			# handle upmost overflow bit
-	&and	($tp,"eax");
-	&not	("eax");
-	&mov	($np,$rp);
-	&and	($np,"eax");
-	&or	($tp,$np);			# tp=carry?tp:rp
+	&mov	("edx",-1);
+	&xor	("edx","eax");
+	&jmp	(&label("copy"));
 
-&set_label("copy",16);				# copy or in-place refresh
-	&mov	("eax",&DWP(0,$tp,$num,4));
-	&mov	(&DWP(0,$rp,$num,4),"eax");	# rp[i]=tp[i]
+&set_label("copy",16);				# conditional copy
+	&mov	($tp,&DWP($frame,"esp",$num,4));
+	&mov	($np,&DWP(0,$rp,$num,4));
 	&mov	(&DWP($frame,"esp",$num,4),$j);	# zap temporary vector
+	&and	($tp,"eax");
+	&and	($np,"edx");
+	&or	($np,$tp);
+	&mov	(&DWP(0,$rp,$num,4),$np);
 	&dec	($num);
 	&jge	(&label("copy"));
 
@@ -626,4 +627,4 @@ $sbit=$num;
 
 &asm_finish();
 
-close STDOUT;
+close STDOUT or die "error closing STDOUT: $!";

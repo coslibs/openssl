@@ -1,7 +1,7 @@
 /*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -17,13 +17,10 @@
 static int b64_write(BIO *h, const char *buf, int num);
 static int b64_read(BIO *h, char *buf, int size);
 static int b64_puts(BIO *h, const char *str);
-/*
- * static int b64_gets(BIO *h, char *str, int size);
- */
 static long b64_ctrl(BIO *h, int cmd, long arg1, void *arg2);
 static int b64_new(BIO *h);
 static int b64_free(BIO *data);
-static long b64_callback_ctrl(BIO *h, int cmd, bio_info_cb *fp);
+static long b64_callback_ctrl(BIO *h, int cmd, BIO_info_cb *fp);
 #define B64_BLOCK_SIZE  1024
 #define B64_BLOCK_SIZE2 768
 #define B64_NONE        0
@@ -47,7 +44,8 @@ typedef struct b64_struct {
 } BIO_B64_CTX;
 
 static const BIO_METHOD methods_b64 = {
-    BIO_TYPE_BASE64, "base64 encoding",
+    BIO_TYPE_BASE64,
+    "base64 encoding",
     /* TODO: Convert to new style write function */
     bwrite_conv,
     b64_write,
@@ -72,9 +70,10 @@ static int b64_new(BIO *bi)
 {
     BIO_B64_CTX *ctx;
 
-    ctx = OPENSSL_zalloc(sizeof(*ctx));
-    if (ctx == NULL)
+    if ((ctx = OPENSSL_zalloc(sizeof(*ctx))) == NULL) {
+        ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
         return 0;
+    }
 
     ctx->cont = 1;
     ctx->start = 1;
@@ -116,7 +115,7 @@ static int b64_read(BIO *b, char *out, int outl)
     BIO *next;
 
     if (out == NULL)
-        return (0);
+        return 0;
     ctx = (BIO_B64_CTX *)BIO_get_data(b);
 
     next = BIO_next(b);
@@ -291,6 +290,14 @@ static int b64_read(BIO *b, char *out, int outl)
                                  (unsigned char *)ctx->tmp, i);
             ctx->tmp_len = 0;
         }
+        /*
+         * If eof or an error was signalled, then the condition
+         * 'ctx->cont <= 0' will prevent b64_read() from reading
+         * more data on subsequent calls. This assignment was
+         * deleted accidentally in commit 5562cfaca4f3.
+         */
+        ctx->cont = i;
+
         ctx->buf_off = 0;
         if (i < 0) {
             ret_code = 0;
@@ -349,7 +356,7 @@ static int b64_write(BIO *b, const char *in, int inl)
         i = BIO_write(next, &(ctx->buf[ctx->buf_off]), n);
         if (i <= 0) {
             BIO_copy_next_retry(b);
-            return (i);
+            return i;
         }
         OPENSSL_assert(i <= n);
         ctx->buf_off += i;
@@ -362,7 +369,7 @@ static int b64_write(BIO *b, const char *in, int inl)
     ctx->buf_len = 0;
 
     if ((in == NULL) || (inl <= 0))
-        return (0);
+        return 0;
 
     while (inl > 0) {
         n = (inl > B64_BLOCK_SIZE) ? B64_BLOCK_SIZE : inl;
@@ -435,7 +442,7 @@ static int b64_write(BIO *b, const char *in, int inl)
         ctx->buf_len = 0;
         ctx->buf_off = 0;
     }
-    return (ret);
+    return ret;
 }
 
 static long b64_ctrl(BIO *b, int cmd, long num, void *ptr)
@@ -525,19 +532,14 @@ static long b64_ctrl(BIO *b, int cmd, long num, void *ptr)
     return ret;
 }
 
-static long b64_callback_ctrl(BIO *b, int cmd, bio_info_cb *fp)
+static long b64_callback_ctrl(BIO *b, int cmd, BIO_info_cb *fp)
 {
-    long ret = 1;
     BIO *next = BIO_next(b);
 
     if (next == NULL)
         return 0;
-    switch (cmd) {
-    default:
-        ret = BIO_callback_ctrl(next, cmd, fp);
-        break;
-    }
-    return (ret);
+
+    return BIO_callback_ctrl(next, cmd, fp);
 }
 
 static int b64_puts(BIO *b, const char *str)

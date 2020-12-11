@@ -1,7 +1,7 @@
 /*
- * Copyright 2000-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -78,7 +78,9 @@ static ASN1_ITEM_EXP *asn1_item_list[] = {
     ASN1_ITEM_ref(IPAddressRange),
 #endif
     ASN1_ITEM_ref(ISSUING_DIST_POINT),
+#ifndef OPENSSL_NO_DEPRECATED_3_0
     ASN1_ITEM_ref(LONG),
+#endif
     ASN1_ITEM_ref(NAME_CONSTRAINTS),
     ASN1_ITEM_ref(NETSCAPE_CERT_SEQUENCE),
     ASN1_ITEM_ref(NETSCAPE_SPKAC),
@@ -133,13 +135,19 @@ static ASN1_ITEM_EXP *asn1_item_list[] = {
     ASN1_ITEM_ref(PROXY_CERT_INFO_EXTENSION),
     ASN1_ITEM_ref(PROXY_POLICY),
 #ifndef OPENSSL_NO_RSA
+# ifndef OPENSSL_NO_DEPRECATED_3_0
     ASN1_ITEM_ref(RSAPrivateKey),
     ASN1_ITEM_ref(RSAPublicKey),
     ASN1_ITEM_ref(RSA_OAEP_PARAMS),
     ASN1_ITEM_ref(RSA_PSS_PARAMS),
+# endif
+#endif
+#ifndef OPENSSL_NO_SCRYPT
+    ASN1_ITEM_ref(SCRYPT_PARAMS),
 #endif
     ASN1_ITEM_ref(SXNETID),
     ASN1_ITEM_ref(SXNET),
+    ASN1_ITEM_ref(ISSUER_SIGN_TOOL),
     ASN1_ITEM_ref(USERNOTICE),
     ASN1_ITEM_ref(X509_ALGORS),
     ASN1_ITEM_ref(X509_ALGOR),
@@ -159,5 +167,15 @@ static ASN1_ITEM_EXP *asn1_item_list[] = {
     ASN1_ITEM_ref(X509_SIG),
     ASN1_ITEM_ref(X509_VAL),
     ASN1_ITEM_ref(X509),
+#ifndef OPENSSL_NO_DEPRECATED_3_0
     ASN1_ITEM_ref(ZLONG),
+#endif
+    ASN1_ITEM_ref(INT32),
+    ASN1_ITEM_ref(UINT32),
+    ASN1_ITEM_ref(ZINT32),
+    ASN1_ITEM_ref(ZUINT32),
+    ASN1_ITEM_ref(INT64),
+    ASN1_ITEM_ref(UINT64),
+    ASN1_ITEM_ref(ZINT64),
+    ASN1_ITEM_ref(ZUINT64),
 };
